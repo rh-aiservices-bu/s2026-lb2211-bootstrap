@@ -1,0 +1,7 @@
+---
+apiVersion: v2
+name: tooling
+description: Custom workbench imagestream for AI501 GenAIOps Enablement
+type: application
+version: 0.1.0
+appVersion: "0.6"

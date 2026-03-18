@@ -1,0 +1,7 @@
+---
+apiVersion: v2
+name: image-puller
+description: DaemonSet to pre-pull workbench images on all cluster nodes
+type: application
+version: 0.1.0
+appVersion: "0.6"

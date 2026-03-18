@@ -1,0 +1,22 @@
+---
+imagestream:
+  name: ai501-custom-code-server
+  namespace: redhat-ods-applications
+  description: >-
+    A custom workbench that has the necessary configuration for
+    AI501 GenAIOps Enablement on Red Hat AI exercises
+  displayName: "AI501 - Custom Code Server"
+  imageUrl: "quay.io/rhoai-genaiops/codeserver:0.5"
+  tag:
+    name: "0.6"
+    imageReference: "quay.io/rhoai-genaiops/codeserver:0.6"
+    pythonDependencies:
+      - name: "kfp"
+        version: "2.14.6"
+        visible: true
+      - name: "kfp-kubernetes"
+        version: "2.14.6"
+        visible: true
+      - name: "spikee"
+        version: "0.4.6"
+        visible: true

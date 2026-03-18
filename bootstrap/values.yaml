@@ -1,0 +1,11 @@
+---
+# Git repository configuration
+# Override git.targetRevision via CI/CD for different environments
+git:
+  repoURL: https://github.com/rh-aiservices-bu/s2026-lb2211-bootstrap
+  targetRevision: main  # Default - override via CI/CD
+
+# ArgoCD configuration
+argocd:
+  namespace: openshift-gitops
+  project: default

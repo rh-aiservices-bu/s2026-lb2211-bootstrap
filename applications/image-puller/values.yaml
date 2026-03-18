@@ -1,0 +1,12 @@
+---
+daemonset:
+  name: workbench-image-puller
+  namespace: redhat-ods-applications
+  image: quay.io/rhoai-genaiops/codeserver:0.6
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
