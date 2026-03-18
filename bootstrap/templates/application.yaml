@@ -3,15 +3,19 @@ apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: bootstrap
-  namespace: openshift-gitops
+  namespace: {{ .Values.argocd.namespace }}
 spec:
-  project: default
+  project: {{ .Values.argocd.project }}
   source:
-    repoURL: https://github.com/rh-aiservices-bu/s2026-lb2211-bootstrap
-    targetRevision: HEAD
+    repoURL: {{ .Values.git.repoURL }}
+    targetRevision: {{ .Values.git.targetRevision }}
     path: applications
+    helm:
+      values: |
+        git:
+          targetRevision: {{ .Values.git.targetRevision }}
   destination:
-    namespace: openshift-gitops
+    namespace: {{ .Values.argocd.namespace }}
     server: https://kubernetes.default.svc
   syncPolicy:
     automated:

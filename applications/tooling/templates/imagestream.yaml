@@ -1,0 +1,32 @@
+---
+kind: ImageStream
+apiVersion: image.openshift.io/v1
+metadata:
+  annotations:
+    opendatahub.io/notebook-image-desc: {{ .Values.imagestream.description | quote }}
+    opendatahub.io/notebook-image-name: {{ .Values.imagestream.displayName | quote }}
+    opendatahub.io/notebook-image-url: {{ .Values.imagestream.imageUrl | quote }}
+    opendatahub.io/recommended-accelerators: '[]'
+  name: {{ .Values.imagestream.name }}
+  namespace: {{ .Values.imagestream.namespace }}
+  labels:
+    app.kubernetes.io/created-by: byon
+    opendatahub.io/dashboard: 'true'
+    opendatahub.io/notebook-image: 'true'
+spec:
+  lookupPolicy:
+    local: true
+  tags:
+    - name: {{ .Values.imagestream.tag.name | quote }}
+      annotations:
+        opendatahub.io/notebook-python-dependencies: {{ .Values.imagestream.tag.pythonDependencies | toJson | quote }}
+        opendatahub.io/notebook-software: '[]'
+        openshift.io/imported-from: {{ .Values.imagestream.tag.imageReference | quote }}
+      from:
+        kind: DockerImage
+        name: {{ .Values.imagestream.tag.imageReference | quote }}
+      generation: 2
+      importPolicy:
+        importMode: Legacy
+      referencePolicy:
+        type: Source

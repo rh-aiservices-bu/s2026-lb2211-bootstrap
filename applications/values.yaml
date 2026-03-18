@@ -1,0 +1,18 @@
+---
+# Git repository configuration
+git:
+  repoURL: https://github.com/rh-aiservices-bu/s2026-lb2211-bootstrap
+  targetRevision: HEAD  # Override this in bootstrap/application.yaml per branch
+
+# ArgoCD configuration
+argocd:
+  namespace: openshift-gitops
+  project: default
+
+# Common sync policy for all applications
+syncPolicy:
+  automated:
+    prune: true
+    selfHeal: true
+  syncOptions:
+    - CreateNamespace=true

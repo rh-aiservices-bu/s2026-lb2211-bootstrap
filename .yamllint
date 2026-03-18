@@ -1,0 +1,22 @@
+---
+extends: default
+
+rules:
+  line-length:
+    max: 120
+    level: warning
+  document-start:
+    present: true
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1  # Allow Helm templates like {{ .Values.foo }}
+  comments:
+    min-spaces-from-content: 1
+  indentation:
+    spaces: 2
+    indent-sequences: true
+
+# Ignore Helm template files - they have valid Go template syntax that yamllint doesn't understand
+ignore: |
+  applications/templates/
+  applications/*/templates/
