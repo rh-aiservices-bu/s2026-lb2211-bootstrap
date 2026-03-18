@@ -1,0 +1,16 @@
+---
+# Markdown linting configuration
+default: true
+
+# Line length - allow longer lines for code examples and links
+MD013:
+  line_length: 120
+  code_blocks: false
+  tables: false
+
+# Allow inline HTML for special formatting
+MD033: false
+
+# Allow duplicate headings (common in multi-section docs)
+MD024:
+  siblings_only: true

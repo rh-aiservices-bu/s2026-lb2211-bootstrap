@@ -1,0 +1,36 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Values.daemonset.name }}
+  namespace: {{ .Values.daemonset.namespace }}
+  labels:
+    app: {{ .Values.daemonset.name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Values.daemonset.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.daemonset.name }}
+    spec:
+      containers:
+      - name: image-puller
+        image: {{ .Values.daemonset.image }}
+        command:
+          - tail
+          - -f
+          - /dev/null
+        resources:
+          requests:
+            cpu: {{ .Values.daemonset.resources.requests.cpu | quote }}
+            memory: {{ .Values.daemonset.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ .Values.daemonset.resources.limits.cpu | quote }}
+            memory: {{ .Values.daemonset.resources.limits.memory | quote }}
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists

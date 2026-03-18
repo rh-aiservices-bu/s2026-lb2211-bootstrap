@@ -1,0 +1,26 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: image-puller
+  namespace: {{ .Values.argocd.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: {{ .Values.argocd.project }}
+  source:
+    repoURL: {{ .Values.git.repoURL }}
+    targetRevision: {{ .Values.git.targetRevision }}
+    path: applications/image-puller
+    helm: {}
+  destination:
+    namespace: redhat-ods-applications
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: {{ .Values.syncPolicy.automated.prune }}
+      selfHeal: {{ .Values.syncPolicy.automated.selfHeal }}
+    syncOptions:
+      {{- range .Values.syncPolicy.syncOptions }}
+      - {{ . }}
+      {{- end }}
