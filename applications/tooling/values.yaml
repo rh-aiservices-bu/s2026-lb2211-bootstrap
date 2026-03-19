@@ -13,10 +13,7 @@ imagestream:
     pythonDependencies:
       - name: "kfp"
         version: "2.14.6"
-        visible: true
       - name: "kfp-kubernetes"
         version: "2.14.6"
-        visible: true
       - name: "spikee"
         version: "0.4.6"
-        visible: true

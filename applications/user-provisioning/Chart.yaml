@@ -1,0 +1,7 @@
+---
+apiVersion: v2
+name: user-provisioning
+description: Job to provision user resources for workshop namespaces
+type: application
+version: 0.1.0
+appVersion: "1.0"

@@ -1,0 +1,88 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.serviceAccount.name }}
+  labels:
+    app: {{ .Values.job.name }}
+rules:
+  # Discover user namespaces
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+  # Create and manage ObjectBucketClaims (ODF/Noobaa)
+  - apiGroups: ["objectbucket.io"]
+    resources: ["objectbucketclaims"]
+    verbs: ["create", "get", "list", "patch"]
+
+  # Create and manage Secrets (OBC credentials, Data Science Connections)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "list", "patch"]
+
+  # Create and manage ConfigMaps (OBC metadata)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "list", "patch"]
+
+  # Create and manage PVCs for workbenches
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "get", "list", "patch"]
+
+  # Create and manage Notebooks (RHODS workbenches)
+  - apiGroups: ["kubeflow.org"]
+    resources: ["notebooks"]
+    verbs: ["create", "get", "list", "patch", "update"]
+
+  # Create and manage ServiceAccounts for workbenches
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["create", "get", "list"]
+
+  # Create and manage RBAC for workbench ServiceAccounts
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["create", "get", "list", "patch", "update"]
+
+  # Create and manage Jobs for git cloning
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list"]
+
+  # Read HTTPRoutes and Gateways (for RHODS dashboard URL in RHOAI 3.x with Gateway API)
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes", "gateways"]
+    verbs: ["get", "list", "watch"]
+
+  # Create and manage ArgoCD AppProjects
+  - apiGroups: ["argoproj.io"]
+    resources: ["appprojects"]
+    verbs: ["create", "get", "list", "patch", "update"]
+
+  # Read Pods (for git clone job to wait for workbench)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # Exec into pods (for git clone operation)
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.serviceAccount.name }}
+  labels:
+    app: {{ .Values.job.name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Values.serviceAccount.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name }}
+    namespace: {{ .Values.serviceAccount.namespace }}

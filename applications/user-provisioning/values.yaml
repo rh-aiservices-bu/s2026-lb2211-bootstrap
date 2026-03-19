@@ -1,0 +1,57 @@
+---
+# Job configuration
+job:
+  name: user-provisioning-job
+  namespace: openshift-gitops  # Job runs in ArgoCD namespace
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 300  # Clean up Job after 5 minutes
+
+  # Container image (uses OpenShift tools image with oc CLI)
+  image: "image-registry.openshift-image-registry.svc:5000/openshift/tools:latest"
+
+  # Namespace pattern for discovering user namespaces
+  namespacePattern: "user*"
+
+  # Workbench configuration
+  workbench:
+    name: "workbench"
+    image: "image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/ai501-custom-code-server:0.6"
+    gitRepo: "https://github.com/rh-aiservices-bu/s2026-lb2211-wksp"
+    gitBranch: "main"
+    displayName: "GenAI Workshop Workbench"
+    description: "CodeServer workbench for GenAI workshop"
+
+    # PVC configuration
+    pvcSize: "5Gi"
+    storageClassName: "ocs-storagecluster-ceph-rbd"
+
+    # Resource requests and limits
+    resources:
+      requests:
+        cpu: "1"
+        memory: "4Gi"
+      limits:
+        cpu: "2"
+        memory: "8Gi"
+
+  # Object Bucket Claim configuration (OpenShift Data Foundation)
+  obc:
+    storageClassName: "openshift-storage.noobaa.io"
+
+  # ArgoCD configuration
+  argocd:
+    namespace: openshift-gitops
+    repoURL: "https://github.com/rh-aiservices-bu/s2026-lb2211-wksp"
+    allowedBranches:
+      - "main"
+      - "dev"
+
+  # Processing configuration (batch throttling)
+  processing:
+    batchSize: 5       # Process users in batches
+    batchDelay: 20     # Seconds to wait between batches
+
+# ServiceAccount configuration
+serviceAccount:
+  name: user-provisioner
+  namespace: openshift-gitops
