@@ -2,20 +2,20 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: tooling
+  name: user-provisioning
   namespace: {{ .Values.argocd.namespace }}
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: {{ .Values.argocd.project }}
   source:
     repoURL: {{ .Values.git.repoURL }}
     targetRevision: {{ .Values.git.targetRevision }}
-    path: applications/tooling
+    path: applications/user-provisioning
     helm:
       valuesObject: {}
   destination:
-    namespace: redhat-ods-applications
+    namespace: openshift-gitops
     server: https://kubernetes.default.svc
   syncPolicy:
     automated:

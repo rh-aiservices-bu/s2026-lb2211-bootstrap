@@ -3,25 +3,42 @@ kind: ImageStream
 apiVersion: image.openshift.io/v1
 metadata:
   annotations:
-    opendatahub.io/notebook-image-desc: {{ .Values.imagestream.description | quote }}
-    opendatahub.io/notebook-image-name: {{ .Values.imagestream.displayName | quote }}
+    platform.opendatahub.io/instance.name: default-workbenches
+    opendatahub.io/notebook-image-order: '1'
     opendatahub.io/notebook-image-url: {{ .Values.imagestream.imageUrl | quote }}
+    internal.config.kubernetes.io/previousNamespaces: default
+    internal.config.kubernetes.io/previousKinds: ImageStream
+    platform.opendatahub.io/instance.generation: '1'
+    opendatahub.io/notebook-image-name: {{ .Values.imagestream.displayName | quote }}
+    internal.config.kubernetes.io/previousNames: code-server-notebook
+    platform.opendatahub.io/version: 3.3.0
+    opendatahub.io/notebook-image-desc: {{ .Values.imagestream.description | quote }}
     opendatahub.io/recommended-accelerators: '[]'
+    platform.opendatahub.io/type: OpenShift AI Self-Managed
   name: {{ .Values.imagestream.name }}
   namespace: {{ .Values.imagestream.namespace }}
   labels:
-    app.kubernetes.io/created-by: byon
-    opendatahub.io/dashboard: 'true'
+    app.kubernetes.io/part-of: workbenches
+    app.opendatahub.io/workbenches: 'true'
+    component.opendatahub.io/name: notebooks
+    opendatahub.io/component: 'true'
     opendatahub.io/notebook-image: 'true'
+    platform.opendatahub.io/part-of: workbenches
 spec:
   lookupPolicy:
     local: true
   tags:
     - name: {{ .Values.imagestream.tag.name | quote }}
       annotations:
+        opendatahub.io/notebook-build-commit: 472674b
         opendatahub.io/notebook-python-dependencies: {{ .Values.imagestream.tag.pythonDependencies | toJson | quote }}
-        opendatahub.io/notebook-software: '[]'
+        opendatahub.io/notebook-software: |
+          [
+            {"name": "code-server", "version": "4.104"},
+            {"name": "Python", "version": "v3.12"}
+          ]
         openshift.io/imported-from: {{ .Values.imagestream.tag.imageReference | quote }}
+        opendatahub.io/workbench-image-recommended: 'true'
       from:
         kind: DockerImage
         name: {{ .Values.imagestream.tag.imageReference | quote }}

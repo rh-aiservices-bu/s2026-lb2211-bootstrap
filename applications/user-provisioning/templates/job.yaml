@@ -1,0 +1,584 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.job.name }}
+  namespace: {{ .Values.job.namespace }}
+  labels:
+    app: {{ .Values.job.name }}
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.job.name }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      restartPolicy: Never
+      containers:
+        - name: provision-users
+          image: {{ .Values.job.image }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+
+              echo "======================================================================"
+              echo "User Provisioning Job Starting"
+              echo "======================================================================"
+
+              # Configuration from Helm values
+              NAMESPACE_PATTERN="{{ .Values.job.namespacePattern }}"
+              WORKBENCH_NAME="{{ .Values.job.workbench.name }}"
+              WORKBENCH_IMAGE="{{ .Values.job.workbench.image }}"
+              GIT_REPO="{{ .Values.job.workbench.gitRepo }}"
+              GIT_BRANCH="{{ .Values.job.workbench.gitBranch }}"
+              PVC_SIZE="{{ .Values.job.workbench.pvcSize }}"
+              STORAGE_CLASS="{{ .Values.job.workbench.storageClassName }}"
+              OBC_STORAGE_CLASS="{{ .Values.job.obc.storageClassName }}"
+              BATCH_SIZE={{ .Values.job.processing.batchSize }}
+              BATCH_DELAY={{ .Values.job.processing.batchDelay }}
+              ARGOCD_NAMESPACE="{{ .Values.job.argocd.namespace }}"
+              ARGOCD_REPO="{{ .Values.job.argocd.repoURL }}"
+
+              # ================================================================
+              # 1. Prerequisites Check
+              # ================================================================
+              echo ""
+              echo "==> Checking prerequisites..."
+
+              # Check RHODS dashboard exists (HTTPRoute in RHOAI 3.x with Gateway API)
+              if ! oc get httproute rhods-dashboard -n redhat-ods-applications &>/dev/null; then
+                echo "ERROR: RHODS dashboard HTTPRoute not found in redhat-ods-applications namespace"
+                exit 1
+              fi
+
+              # Get hostname from Gateway (Gateway API in openshift-ingress namespace)
+              if ! oc get gateway data-science-gateway -n openshift-ingress &>/dev/null; then
+                echo "ERROR: Gateway 'data-science-gateway' not found in openshift-ingress namespace"
+                exit 1
+              fi
+
+              DASHBOARD_HOSTNAME="$(oc get gateway data-science-gateway -n openshift-ingress -o jsonpath='{.status.addresses[0].value}')"
+              if [ -z "$DASHBOARD_HOSTNAME" ]; then
+                echo "ERROR: Could not extract hostname from Gateway 'data-science-gateway'"
+                exit 1
+              fi
+
+              DASHBOARD_ROUTE="https://${DASHBOARD_HOSTNAME}"
+              echo "    ✓ RHODS Dashboard: ${DASHBOARD_ROUTE}"
+
+              # Check ODF storage class exists
+              if ! oc get storageclass "${OBC_STORAGE_CLASS}" &>/dev/null; then
+                echo "ERROR: ODF storage class '${OBC_STORAGE_CLASS}' not found"
+                exit 1
+              fi
+              echo "    ✓ ODF storage class: ${OBC_STORAGE_CLASS}"
+
+              # Check RBD storage class exists
+              if ! oc get storageclass "${STORAGE_CLASS}" &>/dev/null; then
+                echo "ERROR: RBD storage class '${STORAGE_CLASS}' not found"
+                exit 1
+              fi
+              echo "    ✓ RBD storage class: ${STORAGE_CLASS}"
+
+              # ================================================================
+              # 2. Discover User Namespaces
+              # ================================================================
+              echo ""
+              echo "==> Discovering user namespaces matching pattern: ${NAMESPACE_PATTERN}"
+
+              USER_NAMESPACES=$(oc get namespaces -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep "^${NAMESPACE_PATTERN}" | grep -E '^user[0-9]+$' || true)
+
+              if [ -z "$USER_NAMESPACES" ]; then
+                echo "WARNING: No user namespaces found matching pattern '${NAMESPACE_PATTERN}'"
+                echo "Job completed with no work to do."
+                exit 0
+              fi
+
+              USER_COUNT=$(echo "$USER_NAMESPACES" | wc -w)
+              echo "    Found ${USER_COUNT} user namespace(s):"
+              echo "$USER_NAMESPACES" | tr ' ' '\n' | sed 's/^/      - /'
+
+              # ================================================================
+              # 3. Process Each User Namespace
+              # ================================================================
+              echo ""
+              echo "==> Processing user namespaces..."
+              echo ""
+
+              counter=0
+              for USER_NAMESPACE in $USER_NAMESPACES; do
+                counter=$((counter + 1))
+                USER_NAME="${USER_NAMESPACE}"
+
+                echo "────────────────────────────────────────────────────────────────────"
+                echo "Processing [${counter}/${USER_COUNT}]: ${USER_NAME}"
+                echo "────────────────────────────────────────────────────────────────────"
+
+                # ============================================================
+                # 3a. Create Object Bucket Claim (OBC)
+                # ============================================================
+                echo "  [1/6] Creating ObjectBucketClaim..."
+
+                OBC_NAME="${USER_NAME}-bucket"
+
+                cat <<EOF | oc apply -f -
+              apiVersion: objectbucket.io/v1alpha1
+              kind: ObjectBucketClaim
+              metadata:
+                name: ${OBC_NAME}
+                namespace: ${USER_NAMESPACE}
+              spec:
+                generateBucketName: ${OBC_NAME}
+                storageClassName: ${OBC_STORAGE_CLASS}
+              EOF
+
+                # Wait for OBC to be bound
+                echo -n "        Waiting for OBC to be provisioned"
+                timeout=300
+                elapsed=0
+                while [ $elapsed -lt $timeout ]; do
+                  OBC_PHASE=$(oc get obc "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                  if [ "$OBC_PHASE" = "Bound" ]; then
+                    echo " ✓"
+                    break
+                  fi
+                  echo -n "."
+                  sleep 5
+                  elapsed=$((elapsed + 5))
+                done
+
+                if [ "$OBC_PHASE" != "Bound" ]; then
+                  echo " ✗"
+                  echo "        ERROR: OBC did not become Bound within ${timeout}s"
+                  continue
+                fi
+
+                # Extract OBC credentials
+                OBC_ACCESS_KEY=$(oc get secret "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' | base64 -d)
+                OBC_SECRET_KEY=$(oc get secret "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.AWS_SECRET_ACCESS_KEY}' | base64 -d)
+                OBC_BUCKET=$(oc get configmap "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.BUCKET_NAME}')
+                OBC_ENDPOINT=$(oc get configmap "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.BUCKET_HOST}')
+
+                echo "        Bucket: ${OBC_BUCKET}"
+                echo "        Endpoint: ${OBC_ENDPOINT}"
+
+                # ============================================================
+                # 3b. Create Data Science Connection
+                # ============================================================
+                echo "  [2/6] Creating Data Science Connection..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: aws-connection-${USER_NAME}
+                namespace: ${USER_NAMESPACE}
+                labels:
+                  opendatahub.io/dashboard: "true"
+                  opendatahub.io/managed: "true"
+                annotations:
+                  opendatahub.io/connection-type: s3
+                  openshift.io/display-name: "Object Storage - ${USER_NAME}"
+              type: Opaque
+              stringData:
+                AWS_ACCESS_KEY_ID: "${OBC_ACCESS_KEY}"
+                AWS_SECRET_ACCESS_KEY: "${OBC_SECRET_KEY}"
+                AWS_DEFAULT_REGION: "us-east-1"
+                AWS_S3_ENDPOINT: "https://${OBC_ENDPOINT}"
+                AWS_S3_BUCKET: "${OBC_BUCKET}"
+              EOF
+
+                echo "        ✓ Data Science Connection created"
+
+                # ============================================================
+                # 3c. Create PVC for Workbench
+                # ============================================================
+                echo "  [3/6] Creating PVC for workbench..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: ${WORKBENCH_NAME}
+                namespace: ${USER_NAMESPACE}
+                labels:
+                  app: ${WORKBENCH_NAME}
+                  opendatahub.io/dashboard: 'true'
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: ${PVC_SIZE}
+                storageClassName: ${STORAGE_CLASS}
+              EOF
+
+                echo "        ✓ PVC created (${PVC_SIZE})"
+
+                # ============================================================
+                # 3d. Create ServiceAccount for Workbench
+                # ============================================================
+                echo "  [4/6] Creating ServiceAccount for workbench..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: v1
+              kind: ServiceAccount
+              metadata:
+                name: ${WORKBENCH_NAME}
+                namespace: ${USER_NAMESPACE}
+                labels:
+                  app: ${WORKBENCH_NAME}
+              EOF
+
+                echo "        ✓ ServiceAccount created"
+
+                # ============================================================
+                # 3e. Create RBAC for Workbench ServiceAccount
+                # ============================================================
+                echo "  [5/8] Creating RBAC for workbench ServiceAccount..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: Role
+              metadata:
+                name: ${WORKBENCH_NAME}-pod-reader
+                namespace: ${USER_NAMESPACE}
+              rules:
+                - apiGroups: [""]
+                  resources: ["pods"]
+                  verbs: ["get", "list"]
+                - apiGroups: [""]
+                  resources: ["pods/exec"]
+                  verbs: ["create"]
+              EOF
+
+                cat <<EOF | oc apply -f -
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: RoleBinding
+              metadata:
+                name: ${WORKBENCH_NAME}-pod-reader
+                namespace: ${USER_NAMESPACE}
+              roleRef:
+                apiGroup: rbac.authorization.k8s.io
+                kind: Role
+                name: ${WORKBENCH_NAME}-pod-reader
+              subjects:
+                - kind: ServiceAccount
+                  name: ${WORKBENCH_NAME}
+                  namespace: ${USER_NAMESPACE}
+              EOF
+
+                echo "        ✓ RBAC created"
+
+                # ============================================================
+                # 3f. Create Notebook (Workbench)
+                # ============================================================
+                echo "  [6/8] Creating Notebook (workbench)..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: kubeflow.org/v1
+              kind: Notebook
+              metadata:
+                name: ${WORKBENCH_NAME}
+                namespace: ${USER_NAMESPACE}
+                labels:
+                  app: ${WORKBENCH_NAME}
+                  opendatahub.io/dashboard: "true"
+                  opendatahub.io/odh-managed: 'true'
+                  opendatahub.io/user: ${USER_NAMESPACE}
+                annotations:
+                  opendatahub.io/image-display-name: 'AI501 - Custom Code Server'
+                  openshift.io/description: '{{ .Values.job.workbench.description }}'
+                  openshift.io/display-name: '{{ .Values.job.workbench.displayName }}'
+                  notebooks.opendatahub.io/last-image-version-git-commit-selection: '472674b'
+                  notebooks.opendatahub.io/last-image-selection: 'ai501-custom-code-server:0.6'
+                  opendatahub.io/hardware-profile-namespace: redhat-ods-applications
+                  opendatahub.io/username: "${USER_NAME}"
+                  opendatahub.io/hardware-profile-name: default-profile
+                  opendatahub.io/connections: ''
+                  notebooks.opendatahub.io/inject-auth: 'true'
+                  opendatahub.io/workbench-image-namespace: ''
+              spec:
+                template:
+                  spec:
+                    serviceAccountName: ${WORKBENCH_NAME}
+                    containers:
+                      - resources:
+                          requests:
+                            cpu: "{{ .Values.job.workbench.resources.requests.cpu }}"
+                            memory: "{{ .Values.job.workbench.resources.requests.memory }}"
+                          limits:
+                            cpu: "{{ .Values.job.workbench.resources.limits.cpu }}"
+                            memory: "{{ .Values.job.workbench.resources.limits.memory }}"
+                        readinessProbe:
+                          failureThreshold: 3
+                          httpGet:
+                            path: /notebook/${USER_NAMESPACE}/${WORKBENCH_NAME}/api
+                            port: notebook-port
+                            scheme: HTTP
+                          initialDelaySeconds: 10
+                          periodSeconds: 5
+                          successThreshold: 1
+                          timeoutSeconds: 1
+                        name: ${WORKBENCH_NAME}
+                        livenessProbe:
+                          failureThreshold: 3
+                          httpGet:
+                            path: /notebook/${USER_NAMESPACE}/${WORKBENCH_NAME}/api
+                            port: notebook-port
+                            scheme: HTTP
+                          initialDelaySeconds: 10
+                          periodSeconds: 5
+                          successThreshold: 1
+                          timeoutSeconds: 1
+                        env:
+                          - name: NOTEBOOK_ARGS
+                            value: |-
+                              --ServerApp.port=8888
+                              --ServerApp.token=''
+                              --ServerApp.password=''
+                              --ServerApp.base_url=/notebook/${USER_NAMESPACE}/${WORKBENCH_NAME}
+                              --ServerApp.quit_button=False
+                              
+                          - name: JUPYTER_IMAGE
+                            value: ${WORKBENCH_IMAGE}
+                          - name: PIPELINES_SSL_SA_CERTS
+                            value: /etc/pki/tls/custom-certs/ca-bundle.crt
+                          - name: KF_PIPELINES_SSL_SA_CERTS
+                            value: /etc/pki/tls/custom-certs/ca-bundle.crt
+                          - name: GIT_SSL_CAINFO
+                            value: /etc/pki/tls/custom-certs/ca-bundle.crt
+                          - name: PIP_CERT
+                            value: /etc/pki/tls/custom-certs/ca-bundle.crt
+                          - name: REQUESTS_CA_BUNDLE
+                            value: /etc/pki/tls/custom-certs/ca-bundle.crt
+                          - name: SSL_CERT_FILE
+                            value: /etc/pki/tls/custom-certs/ca-bundle.crt
+                        ports:
+                          - name: notebook-port
+                            containerPort: 8888
+                            protocol: TCP
+                        imagePullPolicy: Always
+                        volumeMounts:
+                          - mountPath: /opt/app-root/src
+                            name: ${WORKBENCH_NAME}
+                          - mountPath: /dev/shm
+                            name: shm
+                          - mountPath: /etc/pki/tls/custom-certs/ca-bundle.crt
+                            name: trusted-ca
+                            readOnly: true
+                            subPath: ca-bundle.crt
+                          - mountPath: /opt/app-root/pipeline-runtimes/
+                            name: runtime-images
+                        image: ${WORKBENCH_IMAGE}
+                        workingDir: /opt/app-root/src
+                      - resources:
+                          limits:
+                            cpu: 100m
+                            memory: 64Mi
+                          requests:
+                            cpu: 100m
+                            memory: 64Mi
+                        readinessProbe:
+                          failureThreshold: 3
+                          httpGet:
+                            path: /healthz
+                            port: 8444
+                            scheme: HTTPS
+                          initialDelaySeconds: 5
+                          periodSeconds: 5
+                          successThreshold: 1
+                          timeoutSeconds: 1
+                        name: kube-rbac-proxy
+                        livenessProbe:
+                          failureThreshold: 3
+                          httpGet:
+                            path: /healthz
+                            port: 8444
+                            scheme: HTTPS
+                          initialDelaySeconds: 30
+                          periodSeconds: 5
+                          successThreshold: 1
+                          timeoutSeconds: 1
+                        ports:
+                          - containerPort: 8443
+                            name: kube-rbac-proxy
+                            protocol: TCP
+                        imagePullPolicy: Always
+                        volumeMounts:
+                          - mountPath: /etc/kube-rbac-proxy
+                            name: kube-rbac-proxy-config
+                          - mountPath: /etc/tls/private
+                            name: kube-rbac-proxy-tls-certificates
+                        image: 'registry.redhat.io/rhoai/odh-kube-auth-proxy-rhel9@sha256:4bff9c9b812872be081e64102cbacb711adfacd1862b5593e9809a6822720131'
+                        args:
+                          - '--secure-listen-address=0.0.0.0:8443'
+                          - '--upstream=http://127.0.0.1:8888/'
+                          - '--logtostderr=true'
+                          - '--v=10'
+                          - '--proxy-endpoints-port=8444'
+                          - '--config-file=/etc/kube-rbac-proxy/config-file.yaml'
+                          - '--tls-cert-file=/etc/tls/private/tls.crt'
+                          - '--tls-private-key-file=/etc/tls/private/tls.key'
+                          - '--auth-header-fields-enabled=true'
+                          - '--auth-header-user-field-name=X-Auth-Request-User'
+                          - '--auth-header-groups-field-name=X-Auth-Request-Groups'
+                    enableServiceLinks: false
+                    serviceAccountName: ${USER_NAME}
+                    volumes:
+                      - name: ${WORKBENCH_NAME}
+                        persistentVolumeClaim:
+                          claimName: ${WORKBENCH_NAME}
+                      - emptyDir:
+                          medium: Memory
+                        name: shm
+                      - configMap:
+                          items:
+                            - key: ca-bundle.crt
+                              path: ca-bundle.crt
+                          name: workbench-trusted-ca-bundle
+                          optional: true
+                        name: trusted-ca
+                      - configMap:
+                          name: pipeline-runtime-images
+                          optional: true
+                        name: runtime-images
+                      - configMap:
+                          defaultMode: 420
+                          name: ${USER_NAME}-kube-rbac-proxy-config
+                        name: kube-rbac-proxy-config
+                      - name: kube-rbac-proxy-tls-certificates
+                        secret:
+                          defaultMode: 420
+                          secretName: ${USER_NAME}-kube-rbac-proxy-tls
+              EOF
+
+                echo "        ✓ Notebook created"
+
+                # ============================================================
+                # 3g. Create Git Clone Job
+                # ============================================================
+                echo "  [7/8] Creating git-clone Job..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                name: git-clone-workshop
+                namespace: ${USER_NAMESPACE}
+                labels:
+                  app: ${WORKBENCH_NAME}
+              spec:
+                backoffLimit: 4
+                template:
+                  spec:
+                    serviceAccountName: ${WORKBENCH_NAME}
+                    restartPolicy: Never
+                    initContainers:
+                      - name: wait-for-workbench
+                        image: {{ .Values.job.image }}
+                        command: ["/bin/bash", "-ec"]
+                        args:
+                          - |
+                            echo -n "Waiting for workbench pod to be running"
+                            timeout=600
+                            elapsed=0
+                            while [ \$elapsed -lt \$timeout ]; do
+                              POD_PHASE=\$(oc get pods -n ${USER_NAMESPACE} -l app=${WORKBENCH_NAME} -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
+                              if [ "\$POD_PHASE" = "Running" ]; then
+                                echo " ✓"
+                                exit 0
+                              fi
+                              echo -n "."
+                              sleep 5
+                              elapsed=\$((elapsed + 5))
+                            done
+                            echo " ✗"
+                            echo "ERROR: Workbench pod did not start within \${timeout}s"
+                            exit 1
+                    containers:
+                      - name: git-clone
+                        image: {{ .Values.job.image }}
+                        command: ["/bin/bash", "-ec"]
+                        args:
+                          - |
+                            echo "Cloning workshop repository..."
+                            WORKBENCH_POD=\$(oc get pods -n ${USER_NAMESPACE} -l app=${WORKBENCH_NAME} -o jsonpath='{.items[0].metadata.name}')
+
+                            # Clone the repository into the workbench
+                            oc exec -n ${USER_NAMESPACE} "\${WORKBENCH_POD}" -c ${WORKBENCH_NAME} -- \
+                              bash -c "cd /opt/app-root/src && git clone ${GIT_REPO} workshop"
+
+                            echo "✓ Repository cloned successfully to /opt/app-root/src/workshop"
+              EOF
+
+                echo "        ✓ Git-clone Job created"
+
+                # ============================================================
+                # 3h. Create ArgoCD AppProject
+                # ============================================================
+                echo "  [8/8] Creating ArgoCD AppProject..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: argoproj.io/v1alpha1
+              kind: AppProject
+              metadata:
+                name: ${USER_NAME}
+                namespace: ${ARGOCD_NAMESPACE}
+                labels:
+                  user: ${USER_NAME}
+              spec:
+                description: "ArgoCD project for ${USER_NAME}"
+                destinations:
+                  - namespace: ${USER_NAMESPACE}
+                    server: https://kubernetes.default.svc
+                sourceRepos:
+                  - ${ARGOCD_REPO}
+                  - ${ARGOCD_REPO}.git
+                {{- range .Values.job.argocd.allowedBranches }}
+                  - ${ARGOCD_REPO}/tree/{{ . }}
+                {{- end }}
+                clusterResourceWhitelist: []
+                namespaceResourceWhitelist:
+                  - group: '*'
+                    kind: '*'
+                roles:
+                  - name: developer
+                    description: "Developer role for ${USER_NAME}"
+                    policies:
+                      - "p, proj:${USER_NAME}:developer, applications, *, ${USER_NAME}/*, allow"
+                    groups:
+                      - ${USER_NAME}
+              EOF
+
+                echo "        ✓ ArgoCD AppProject created"
+
+                echo "  ✓ User ${USER_NAME} provisioning complete!"
+                echo ""
+
+                # Batch delay
+                if [ $((counter % BATCH_SIZE)) -eq 0 ] && [ $counter -lt $USER_COUNT ]; then
+                  echo "  [Batch throttling: sleeping for ${BATCH_DELAY}s...]"
+                  sleep ${BATCH_DELAY}
+                  echo ""
+                fi
+              done
+
+              echo "======================================================================"
+              echo "User Provisioning Job Complete"
+              echo "======================================================================"
+              echo "Total users processed: ${USER_COUNT}"
+              echo ""
+              echo "Resources created per user:"
+              echo "  - ObjectBucketClaim (OBC)"
+              echo "  - Data Science Connection (Secret)"
+              echo "  - PersistentVolumeClaim (${PVC_SIZE})"
+              echo "  - ServiceAccount"
+              echo "  - RBAC (Role + RoleBinding)"
+              echo "  - Notebook (CodeServer workbench)"
+              echo "  - Git-clone Job"
+              echo "  - ArgoCD AppProject"
+              echo "======================================================================"

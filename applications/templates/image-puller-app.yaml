@@ -12,7 +12,8 @@ spec:
     repoURL: {{ .Values.git.repoURL }}
     targetRevision: {{ .Values.git.targetRevision }}
     path: applications/image-puller
-    helm: {}
+    helm:
+      valuesObject: {}
   destination:
     namespace: redhat-ods-applications
     server: https://kubernetes.default.svc
