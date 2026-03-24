@@ -6,10 +6,20 @@ metadata:
   labels:
     app: {{ .Values.job.name }}
 rules:
-  # Discover user namespaces
+  # Discover and label namespaces
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+
+  # Create and manage Projects (OpenShift)
+  - apiGroups: ["project.openshift.io"]
+    resources: ["projects"]
+    verbs: ["create", "get", "list", "patch", "update"]
+
+  # Read StorageClasses (for prerequisite checks)
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
 
   # Create and manage ObjectBucketClaims (ODF/Noobaa)
   - apiGroups: ["objectbucket.io"]

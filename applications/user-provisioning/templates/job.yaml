@@ -6,6 +6,8 @@ metadata:
   namespace: {{ .Values.job.namespace }}
   labels:
     app: {{ .Values.job.name }}
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true
 spec:
   backoffLimit: {{ .Values.job.backoffLimit }}
   ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
@@ -84,22 +86,81 @@ spec:
               echo "    ✓ RBD storage class: ${STORAGE_CLASS}"
 
               # ================================================================
-              # 2. Discover User Namespaces
+              # 2. Discover Showroom Projects and Create User Namespaces
               # ================================================================
               echo ""
-              echo "==> Discovering user namespaces matching pattern: ${NAMESPACE_PATTERN}"
+              echo "==> Discovering showroom projects..."
 
-              USER_NAMESPACES=$(oc get namespaces -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep "^${NAMESPACE_PATTERN}" | grep -E '^user[0-9]+$' || true)
+              # Count showroom projects to determine number of users
+              USER_COUNT=$(oc get projects -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep -c "^showroom-" || echo "0")
 
-              if [ -z "$USER_NAMESPACES" ]; then
-                echo "WARNING: No user namespaces found matching pattern '${NAMESPACE_PATTERN}'"
+              if [ "$USER_COUNT" -eq 0 ]; then
+                echo "WARNING: No showroom projects found"
                 echo "Job completed with no work to do."
                 exit 0
               fi
 
-              USER_COUNT=$(echo "$USER_NAMESPACES" | wc -w)
-              echo "    Found ${USER_COUNT} user namespace(s):"
-              echo "$USER_NAMESPACES" | tr ' ' '\n' | sed 's/^/      - /'
+              echo "    Found ${USER_COUNT} showroom project(s) → creating ${USER_COUNT} users"
+
+              # ================================================================
+              # 2a. Create User Projects
+              # ================================================================
+              echo ""
+              echo "==> Creating user projects..."
+
+              USER_NAMESPACES=""
+              for i in $(seq 1 $USER_COUNT); do
+                USER_NAME="user${i}"
+
+                # Check if namespace exists
+                if oc get namespace "${USER_NAME}" &>/dev/null; then
+                  echo "  Namespace ${USER_NAME} exists, checking Project..."
+
+                  # Check if Project resource exists
+                  if ! oc get project "${USER_NAME}" &>/dev/null; then
+                    echo "    Creating Project resource for existing namespace..."
+                    # Use oc create (not apply) to avoid annotation issues
+                    cat <<EOF | oc create -f -
+              apiVersion: project.openshift.io/v1
+              kind: Project
+              metadata:
+                name: ${USER_NAME}
+                labels:
+                  opendatahub.io/dashboard: 'true'
+                annotations:
+                  openshift.io/description: "Data Science workspace for ${USER_NAME}"
+                  openshift.io/display-name: "${USER_NAME}"
+              EOF
+                  fi
+
+                  # Ensure the OpenShift AI dashboard label is present
+                  oc label namespace "${USER_NAME}" opendatahub.io/dashboard=true --overwrite
+                  echo "    ✓ Project ${USER_NAME} ready"
+                else
+                  echo "  Creating project for: ${USER_NAME}"
+                  # Create Project (which creates the underlying namespace)
+                  cat <<EOF | oc create -f -
+              apiVersion: project.openshift.io/v1
+              kind: Project
+              metadata:
+                name: ${USER_NAME}
+                labels:
+                  opendatahub.io/dashboard: 'true'
+                annotations:
+                  openshift.io/description: "Data Science workspace for ${USER_NAME}"
+                  openshift.io/display-name: "${USER_NAME}"
+              EOF
+                  echo "    ✓ Project ${USER_NAME} created"
+                fi
+
+                USER_NAMESPACES="${USER_NAMESPACES} ${USER_NAME}"
+              done
+
+              # Trim leading space
+              USER_NAMESPACES=$(echo "$USER_NAMESPACES" | xargs)
+
+              echo ""
+              echo "    Created ${USER_COUNT} user project(s)"
 
               # ================================================================
               # 3. Process Each User Namespace
@@ -120,7 +181,7 @@ spec:
                 # ============================================================
                 # 3a. Create Object Bucket Claim (OBC)
                 # ============================================================
-                echo "  [1/6] Creating ObjectBucketClaim..."
+                echo "  [1/8] Creating ObjectBucketClaim..."
 
                 OBC_NAME="${USER_NAME}-bucket"
 
@@ -168,7 +229,7 @@ spec:
                 # ============================================================
                 # 3b. Create Data Science Connection
                 # ============================================================
-                echo "  [2/6] Creating Data Science Connection..."
+                echo "  [2/8] Creating Data Science Connection..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -196,7 +257,7 @@ spec:
                 # ============================================================
                 # 3c. Create PVC for Workbench
                 # ============================================================
-                echo "  [3/6] Creating PVC for workbench..."
+                echo "  [3/8] Creating PVC for workbench..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -221,7 +282,7 @@ spec:
                 # ============================================================
                 # 3d. Create ServiceAccount for Workbench
                 # ============================================================
-                echo "  [4/6] Creating ServiceAccount for workbench..."
+                echo "  [4/8] Creating ServiceAccount for workbench..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -505,14 +566,19 @@ spec:
                         command: ["/bin/bash", "-ec"]
                         args:
                           - |
-                            echo "Cloning workshop repository..."
+                            echo "Checking workshop repository..."
                             WORKBENCH_POD=\$(oc get pods -n ${USER_NAMESPACE} -l app=${WORKBENCH_NAME} -o jsonpath='{.items[0].metadata.name}')
 
-                            # Clone the repository into the workbench
-                            oc exec -n ${USER_NAMESPACE} "\${WORKBENCH_POD}" -c ${WORKBENCH_NAME} -- \
-                              bash -c "cd /opt/app-root/src && git clone ${GIT_REPO} workshop"
-
-                            echo "✓ Repository cloned successfully to /opt/app-root/src/workshop"
+                            # Check if workshop directory already exists
+                            if oc exec -n ${USER_NAMESPACE} "\${WORKBENCH_POD}" -c ${WORKBENCH_NAME} -- \
+                              bash -c "[ -d /opt/app-root/src/workshop ]" 2>/dev/null; then
+                              echo "✓ Workshop repository already exists at /opt/app-root/src/workshop"
+                            else
+                              echo "Cloning workshop repository..."
+                              oc exec -n ${USER_NAMESPACE} "\${WORKBENCH_POD}" -c ${WORKBENCH_NAME} -- \
+                                bash -c "cd /opt/app-root/src && git clone ${GIT_REPO} workshop"
+                              echo "✓ Repository cloned successfully to /opt/app-root/src/workshop"
+                            fi
               EOF
 
                 echo "        ✓ Git-clone Job created"
@@ -573,6 +639,7 @@ spec:
               echo "Total users processed: ${USER_COUNT}"
               echo ""
               echo "Resources created per user:"
+              echo "  - Project (OpenShift namespace)"
               echo "  - ObjectBucketClaim (OBC)"
               echo "  - Data Science Connection (Secret)"
               echo "  - PersistentVolumeClaim (${PVC_SIZE})"

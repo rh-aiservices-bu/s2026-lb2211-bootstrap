@@ -2,7 +2,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: bootstrap
+  name: applications
   namespace: {{ .Values.argocd.namespace }}
 spec:
   project: {{ .Values.argocd.project }}
