@@ -51,10 +51,16 @@ rules:
     resources: ["serviceaccounts"]
     verbs: ["create", "get", "list"]
 
-  # Create and manage RBAC for workbench ServiceAccounts
+  # Create and manage RBAC for workbench ServiceAccounts and grant user permissions
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
-    verbs: ["create", "get", "list", "patch", "update"]
+    verbs: ["create", "get", "list", "patch", "update", "bind", "escalate"]
+
+  # Grant permissions to the admin ClusterRole (needed for bind/escalate)
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames: ["admin"]
+    verbs: ["bind"]
 
   # Create and manage Jobs for git cloning
   - apiGroups: ["batch"]
