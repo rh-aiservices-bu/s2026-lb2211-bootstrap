@@ -179,9 +179,19 @@ spec:
                 echo "────────────────────────────────────────────────────────────────────"
 
                 # ============================================================
-                # 3a. Create Object Bucket Claim (OBC)
+                # 3a. Grant User Permissions to Project
                 # ============================================================
-                echo "  [1/8] Creating ObjectBucketClaim..."
+                echo "  [1/9] Granting user permissions to project..."
+
+                # Grant admin role to the real user account in their namespace
+                oc adm policy add-role-to-user admin "${USER_NAME}" -n "${USER_NAMESPACE}"
+
+                echo "        ✓ User ${USER_NAME} granted admin role"
+
+                # ============================================================
+                # 3b. Create Object Bucket Claim (OBC)
+                # ============================================================
+                echo "  [2/9] Creating ObjectBucketClaim..."
 
                 OBC_NAME="${USER_NAME}-bucket"
 
@@ -227,9 +237,9 @@ spec:
                 echo "        Endpoint: ${OBC_ENDPOINT}"
 
                 # ============================================================
-                # 3b. Create Data Science Connection
+                # 3c. Create Data Science Connection
                 # ============================================================
-                echo "  [2/8] Creating Data Science Connection..."
+                echo "  [3/9] Creating Data Science Connection..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -255,9 +265,9 @@ spec:
                 echo "        ✓ Data Science Connection created"
 
                 # ============================================================
-                # 3c. Create PVC for Workbench
+                # 3d. Create PVC for Workbench
                 # ============================================================
-                echo "  [3/8] Creating PVC for workbench..."
+                echo "  [4/9] Creating PVC for workbench..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -280,9 +290,9 @@ spec:
                 echo "        ✓ PVC created (${PVC_SIZE})"
 
                 # ============================================================
-                # 3d. Create ServiceAccount for Workbench
+                # 3e. Create ServiceAccount for Workbench
                 # ============================================================
-                echo "  [4/8] Creating ServiceAccount for workbench..."
+                echo "  [5/9] Creating ServiceAccount for workbench..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -297,9 +307,9 @@ spec:
                 echo "        ✓ ServiceAccount created"
 
                 # ============================================================
-                # 3e. Create RBAC for Workbench ServiceAccount
+                # 3f. Create RBAC for Workbench ServiceAccount
                 # ============================================================
-                echo "  [5/8] Creating RBAC for workbench ServiceAccount..."
+                echo "  [6/9] Creating RBAC for workbench ServiceAccount..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: rbac.authorization.k8s.io/v1
@@ -335,9 +345,9 @@ spec:
                 echo "        ✓ RBAC created"
 
                 # ============================================================
-                # 3f. Create Notebook (Workbench)
+                # 3g. Create Notebook (Workbench)
                 # ============================================================
-                echo "  [6/8] Creating Notebook (workbench)..."
+                echo "  [7/9] Creating Notebook (workbench)..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: kubeflow.org/v1
@@ -488,7 +498,7 @@ spec:
                           - '--auth-header-user-field-name=X-Auth-Request-User'
                           - '--auth-header-groups-field-name=X-Auth-Request-Groups'
                     enableServiceLinks: false
-                    serviceAccountName: ${USER_NAME}
+                    serviceAccountName: ${WORKBENCH_NAME}
                     volumes:
                       - name: ${WORKBENCH_NAME}
                         persistentVolumeClaim:
@@ -520,9 +530,9 @@ spec:
                 echo "        ✓ Notebook created"
 
                 # ============================================================
-                # 3g. Create Git Clone Job
+                # 3h. Create Git Clone Job
                 # ============================================================
-                echo "  [7/8] Creating git-clone Job..."
+                echo "  [8/9] Creating git-clone Job..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: batch/v1
@@ -584,9 +594,9 @@ spec:
                 echo "        ✓ Git-clone Job created"
 
                 # ============================================================
-                # 3h. Create ArgoCD AppProject
+                # 3i. Create ArgoCD AppProject
                 # ============================================================
-                echo "  [8/8] Creating ArgoCD AppProject..."
+                echo "  [9/9] Creating ArgoCD AppProject..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: argoproj.io/v1alpha1
