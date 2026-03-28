@@ -162,8 +162,27 @@ Before marking any application work as complete:
    - App charts (`applications/<app-name>/`) generate actual Kubernetes resources
 6. **Ask When Uncertain**: Especially about naming, deployment order, or sync waves
 
+## Deployed Applications
+
+### image-puller (sync-wave: 0)
+- **Namespace**: `redhat-ods-applications`
+- **Resources**: DaemonSet
+- **Purpose**: Pre-pull the workbench container image on all cluster nodes before workbenches start (tolerates all taints)
+
+### tooling (sync-wave: 1)
+- **Namespace**: `redhat-ods-applications`
+- **Resources**: ImageStream
+- **Purpose**: Register the custom Code Server workbench image in the RHOAI dashboard so users can select it
+
+### user-provisioning (sync-wave: 2)
+- **Namespace**: `openshift-gitops` (Job runs here with cluster-wide permissions)
+- **Resources**: ServiceAccount, ClusterRole, ClusterRoleBinding, Job
+- **Purpose**: Discover `showroom-*` projects, create corresponding `user1..userN` namespaces, and provision per-user resources (Project, OBC, Data Science Connection, PVC, ServiceAccount, RBAC, Notebook workbench, git-clone Job, ArgoCD AppProject)
+- **Prerequisites**: RHOAI 3.x with Gateway API, ODF with NooBaa
+
 ## Repository Context
 
+- **Workshop**: AI501 GenAIOps Enablement (Summit 2026, lab LB2211)
 - **Primary branch**: `main`
 - **Dev branch**: `dev`
 - **Bootstrap chart**: `bootstrap/` (Helm chart with templated Application)

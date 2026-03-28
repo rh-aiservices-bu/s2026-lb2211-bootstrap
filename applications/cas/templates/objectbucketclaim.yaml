@@ -1,0 +1,9 @@
+---
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: {{ .Values.obc.name }}
+  namespace: {{ .Values.fusionServiceInstance.casNamespace }}
+spec:
+  generateBucketName: {{ .Values.obc.name }}
+  storageClassName: {{ .Values.obc.storageClassName }}

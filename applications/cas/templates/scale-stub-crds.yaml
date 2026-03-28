@@ -1,0 +1,41 @@
+---
+# Stub CRDs for IBM Spectrum Scale
+# The CAS operator controller requires certain scale.spectrum.ibm.com/v1beta1
+# resources to be registered in the API server (it watches/lists them at startup).
+# Since we don't deploy full Spectrum Scale, these minimal CRDs satisfy the API
+# registration so the controller gets empty lists instead of crashlooping.
+{{- range .Values.scaleStubCRDs }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: {{ .plural }}.scale.spectrum.ibm.com
+  labels:
+    app.kubernetes.io/name: cas
+    app.kubernetes.io/component: scale-stub
+spec:
+  group: scale.spectrum.ibm.com
+  names:
+    categories:
+      - scale
+    kind: {{ .kind }}
+    listKind: {{ .kind }}List
+    plural: {{ .plural }}
+    singular: {{ .singular }}
+    {{- with .shortNames }}
+    shortNames:
+      {{- range . }}
+      - {{ . }}
+      {{- end }}
+    {{- end }}
+  scope: Namespaced
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: "Stub CRD for IBM Spectrum Scale {{ .kind }}. Registered to satisfy CAS operator dependencies."
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+{{- end }}

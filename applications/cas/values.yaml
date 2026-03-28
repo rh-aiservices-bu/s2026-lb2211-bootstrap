@@ -1,0 +1,25 @@
+---
+# CAS FusionServiceInstance configuration
+fusionServiceInstance:
+  name: ibm-cas-service-instance
+  namespace: ibm-spectrum-fusion-ns
+  serviceDefinition: ibm-cas-service
+  storageClass: ocs-storagecluster-cephfs
+  casNamespace: ibm-cas
+
+# ObjectBucketClaim for S3 storage via ODF/NooBaa
+obc:
+  name: cas-bucket
+  storageClassName: openshift-storage.noobaa.io
+
+# Stub CRDs for IBM Spectrum Scale types required by CAS operator
+# Add entries here if the CAS controller fails on additional missing Scale CRDs
+scaleStubCRDs:
+  - kind: Filesystem
+    plural: filesystems
+    singular: filesystem
+    shortNames: [fs]
+  - kind: RemoteCluster
+    plural: remoteclusters
+    singular: remotecluster
+    shortNames: [remotegpfs]
