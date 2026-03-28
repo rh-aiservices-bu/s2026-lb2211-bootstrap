@@ -7,10 +7,9 @@ metadata:
   labels:
     app: {{ .Values.job.name }}
   annotations:
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Delete=true
 spec:
   backoffLimit: {{ .Values.job.backoffLimit }}
-  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
   template:
     metadata:
       labels:
@@ -39,6 +38,10 @@ spec:
               PVC_SIZE="{{ .Values.job.workbench.pvcSize }}"
               STORAGE_CLASS="{{ .Values.job.workbench.storageClassName }}"
               OBC_STORAGE_CLASS="{{ .Values.job.obc.storageClassName }}"
+              CAS_ENABLED="{{ .Values.job.cas.enabled }}"
+              CAS_NAMESPACE="{{ .Values.job.cas.namespace }}"
+              CAS_S3_ENDPOINT="{{ .Values.job.cas.s3Endpoint }}"
+              CAS_DOC_PROCESSOR_TYPE="{{ .Values.job.cas.documentProcessorType }}"
               BATCH_SIZE={{ .Values.job.processing.batchSize }}
               BATCH_DELAY={{ .Values.job.processing.batchDelay }}
               ARGOCD_NAMESPACE="{{ .Values.job.argocd.namespace }}"
@@ -181,7 +184,7 @@ spec:
                 # ============================================================
                 # 3a. Grant User Permissions to Project
                 # ============================================================
-                echo "  [1/9] Granting user permissions to project..."
+                echo "  [1/12] Granting user permissions to project..."
 
                 # Grant admin role to the real user account in their namespace
                 oc adm policy add-role-to-user admin "${USER_NAME}" -n "${USER_NAMESPACE}"
@@ -191,7 +194,7 @@ spec:
                 # ============================================================
                 # 3b. Create Object Bucket Claim (OBC)
                 # ============================================================
-                echo "  [2/9] Creating ObjectBucketClaim..."
+                echo "  [2/12] Creating ObjectBucketClaim..."
 
                 OBC_NAME="${USER_NAME}-bucket"
 
@@ -239,7 +242,7 @@ spec:
                 # ============================================================
                 # 3c. Create Data Science Connection
                 # ============================================================
-                echo "  [3/9] Creating Data Science Connection..."
+                echo "  [3/12] Creating Data Science Connection..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -267,7 +270,7 @@ spec:
                 # ============================================================
                 # 3d. Create PVC for Workbench
                 # ============================================================
-                echo "  [4/9] Creating PVC for workbench..."
+                echo "  [4/12] Creating PVC for workbench..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -292,7 +295,7 @@ spec:
                 # ============================================================
                 # 3e. Create ServiceAccount for Workbench
                 # ============================================================
-                echo "  [5/9] Creating ServiceAccount for workbench..."
+                echo "  [5/12] Creating ServiceAccount for workbench..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: v1
@@ -309,7 +312,7 @@ spec:
                 # ============================================================
                 # 3f. Create RBAC for Workbench ServiceAccount
                 # ============================================================
-                echo "  [6/9] Creating RBAC for workbench ServiceAccount..."
+                echo "  [6/12] Creating RBAC for workbench ServiceAccount..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: rbac.authorization.k8s.io/v1
@@ -347,7 +350,7 @@ spec:
                 # ============================================================
                 # 3g. Create Notebook (Workbench)
                 # ============================================================
-                echo "  [7/9] Creating Notebook (workbench)..."
+                echo "  [7/12] Creating Notebook (workbench)..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: kubeflow.org/v1
@@ -532,7 +535,7 @@ spec:
                 # ============================================================
                 # 3h. Create Git Clone Job
                 # ============================================================
-                echo "  [8/9] Creating git-clone Job..."
+                echo "  [8/12] Creating git-clone Job..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: batch/v1
@@ -596,7 +599,7 @@ spec:
                 # ============================================================
                 # 3i. Create ArgoCD AppProject
                 # ============================================================
-                echo "  [9/9] Creating ArgoCD AppProject..."
+                echo "  [9/12] Creating ArgoCD AppProject..."
 
                 cat <<EOF | oc apply -f -
               apiVersion: argoproj.io/v1alpha1
@@ -632,6 +635,112 @@ spec:
 
                 echo "        ✓ ArgoCD AppProject created"
 
+                # ============================================================
+                # 3j. Create CAS S3 Credentials Secret
+                # ============================================================
+                if [ "$CAS_ENABLED" = "true" ]; then
+                echo "  [10/12] Creating CAS S3 credentials secret..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: cas-s3-secret-${USER_NAME}
+                namespace: ${CAS_NAMESPACE}
+                labels:
+                  app: cas
+                  user: ${USER_NAME}
+              type: Opaque
+              stringData:
+                accessKey: "${OBC_ACCESS_KEY}"
+                secretKey: "${OBC_SECRET_KEY}"
+              EOF
+
+                echo "        ✓ CAS S3 credentials secret created"
+
+                # ============================================================
+                # 3k. Create CAS DataSource and Domain
+                # ============================================================
+                echo "  [11/12] Creating CAS DataSource and Domain..."
+
+                # Create stub Filesystem CR (CAS operator requires it even for S3)
+                cat <<EOF | oc apply -f -
+              apiVersion: scale.spectrum.ibm.com/v1beta1
+              kind: Filesystem
+              metadata:
+                name: fs-${USER_NAME}
+                namespace: ${CAS_NAMESPACE}
+                labels:
+                  app: cas
+                  user: ${USER_NAME}
+              EOF
+
+                cat <<EOF | oc apply -f -
+              apiVersion: cas.isf.ibm.com/v1beta1
+              kind: DataSource
+              metadata:
+                name: ds-${USER_NAME}
+                namespace: ${CAS_NAMESPACE}
+                labels:
+                  app: cas
+                  user: ${USER_NAME}
+              spec:
+                s3:
+                  bucket: "${OBC_BUCKET}"
+                  endpoint: "${CAS_S3_ENDPOINT}"
+                  provider: aws
+                  fileSystemName: fs-${USER_NAME}
+                  credentials:
+                    secretName: cas-s3-secret-${USER_NAME}
+                    accessKeyRef:
+                      key: accessKey
+                    secretKeyRef:
+                      key: secretKey
+              EOF
+
+                cat <<EOF | oc apply -f -
+              apiVersion: cas.isf.ibm.com/v1beta1
+              kind: Domain
+              metadata:
+                name: domain-${USER_NAME}
+                namespace: ${CAS_NAMESPACE}
+                labels:
+                  app: cas
+                  user: ${USER_NAME}
+              spec:
+                dataSources:
+                  - ds-${USER_NAME}
+                collections:
+                  - name: "domain-${USER_NAME}"
+              EOF
+
+                echo "        ✓ CAS DataSource and Domain created"
+
+                # ============================================================
+                # 3l. Create CAS DocumentProcessor
+                # ============================================================
+                echo "  [12/12] Creating CAS DocumentProcessor..."
+
+                cat <<EOF | oc apply -f -
+              apiVersion: cas.isf.ibm.com/v1beta1
+              kind: DocumentProcessor
+              metadata:
+                name: docproc-${USER_NAME}
+                namespace: ${CAS_NAMESPACE}
+                labels:
+                  app: cas
+                  user: ${USER_NAME}
+              spec:
+                type: ${CAS_DOC_PROCESSOR_TYPE}
+                domains:
+                  - domain-${USER_NAME}
+              EOF
+
+                echo "        ✓ CAS DocumentProcessor created"
+                else
+                echo "  [10-12/12] CAS provisioning skipped (disabled)"
+                fi
+
                 echo "  ✓ User ${USER_NAME} provisioning complete!"
                 echo ""
 
@@ -658,4 +767,10 @@ spec:
               echo "  - Notebook (CodeServer workbench)"
               echo "  - Git-clone Job"
               echo "  - ArgoCD AppProject"
+              if [ "$CAS_ENABLED" = "true" ]; then
+              echo "  - CAS S3 Credentials Secret (in ${CAS_NAMESPACE})"
+              echo "  - CAS DataSource (in ${CAS_NAMESPACE})"
+              echo "  - CAS Domain (in ${CAS_NAMESPACE})"
+              echo "  - CAS DocumentProcessor (in ${CAS_NAMESPACE})"
+              fi
               echo "======================================================================"

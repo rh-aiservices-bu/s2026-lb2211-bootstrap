@@ -77,6 +77,16 @@ rules:
     resources: ["appprojects"]
     verbs: ["create", "get", "list", "patch", "update"]
 
+  # Create and manage CAS resources (DataSource, Domain, DocumentProcessor)
+  - apiGroups: ["cas.isf.ibm.com"]
+    resources: ["datasources", "domains", "documentprocessors"]
+    verbs: ["create", "get", "list", "patch", "update"]
+
+  # Create stub Filesystem CRs for CAS DataSource dependencies
+  - apiGroups: ["scale.spectrum.ibm.com"]
+    resources: ["filesystems"]
+    verbs: ["create", "get", "list", "patch"]
+
   # Read Pods (for git clone job to wait for workbench)
   - apiGroups: [""]
     resources: ["pods"]
