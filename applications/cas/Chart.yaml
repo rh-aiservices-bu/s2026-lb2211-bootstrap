@@ -1,0 +1,7 @@
+---
+apiVersion: v2
+name: cas
+description: IBM Content-Aware Storage (CAS) service deployment via Fusion
+type: application
+version: 0.1.0
+appVersion: "2.12"

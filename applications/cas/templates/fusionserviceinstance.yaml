@@ -1,0 +1,22 @@
+---
+apiVersion: service.isf.ibm.com/v1
+kind: FusionServiceInstance
+metadata:
+  name: {{ .Values.fusionServiceInstance.name }}
+  namespace: {{ .Values.fusionServiceInstance.namespace }}
+spec:
+  creator: User
+  doInstall: true
+  parameters:
+    - name: namespace
+      provided: false
+      value: {{ .Values.fusionServiceInstance.casNamespace }}
+    - name: doInstall
+      provided: false
+      value: "false"
+    - name: storageClass
+      provided: true
+      value: {{ .Values.fusionServiceInstance.storageClass }}
+  serviceDefinition: {{ .Values.fusionServiceInstance.serviceDefinition }}
+  triggerUpdate: false
+  updateServiceCRSpec: false

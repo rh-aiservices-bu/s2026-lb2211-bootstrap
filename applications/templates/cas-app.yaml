@@ -1,0 +1,33 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cas
+  namespace: {{ .Values.argocd.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: {{ .Values.argocd.project }}
+  source:
+    repoURL: {{ .Values.git.repoURL }}
+    targetRevision: {{ .Values.git.targetRevision }}
+    path: applications/cas
+    helm:
+      valuesObject: {}
+  destination:
+    namespace: ibm-spectrum-fusion-ns
+    server: https://kubernetes.default.svc
+  ignoreDifferences:
+    - group: service.isf.ibm.com
+      kind: FusionServiceInstance
+      jsonPointers:
+        - /spec/doInstall
+  syncPolicy:
+    automated:
+      prune: {{ .Values.syncPolicy.automated.prune }}
+      selfHeal: {{ .Values.syncPolicy.automated.selfHeal }}
+    syncOptions:
+      {{- range .Values.syncPolicy.syncOptions }}
+      - {{ . }}
+      {{- end }}
+      - ServerSideApply=true
