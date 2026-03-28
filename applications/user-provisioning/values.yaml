@@ -4,7 +4,6 @@ job:
   name: user-provisioning-job
   namespace: openshift-gitops  # Job runs in ArgoCD namespace
   backoffLimit: 4
-  ttlSecondsAfterFinished: 300  # Clean up Job after 5 minutes
 
   # Container image (uses OpenShift tools image with oc CLI)
   image: "image-registry.openshift-image-registry.svc:5000/openshift/tools:latest"
@@ -37,6 +36,13 @@ job:
   # Object Bucket Claim configuration (OpenShift Data Foundation)
   obc:
     storageClassName: "openshift-storage.noobaa.io"
+
+  # CAS (Content-Aware Storage) per-user configuration
+  cas:
+    enabled: true
+    namespace: ibm-cas
+    s3Endpoint: "http://s3.openshift-storage.svc"
+    documentProcessorType: docling_multimodal  # or nvidia_multimodal (requires GPU)
 
   # ArgoCD configuration
   argocd:
