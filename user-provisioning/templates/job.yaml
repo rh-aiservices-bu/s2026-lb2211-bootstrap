@@ -2,10 +2,11 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Values.job.name }}
+  name: user-provisioning-{{ .Values.username }}
   namespace: {{ .Values.job.namespace }}
   labels:
-    app: {{ .Values.job.name }}
+    app: user-provisioning
+    user: {{ .Values.username }}
   annotations:
     argocd.argoproj.io/sync-options: Delete=true
 spec:
@@ -13,24 +14,27 @@ spec:
   template:
     metadata:
       labels:
-        app: {{ .Values.job.name }}
+        app: user-provisioning
+        user: {{ .Values.username }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
       restartPolicy: Never
       containers:
-        - name: provision-users
+        - name: provision-user
           image: {{ .Values.job.image }}
           command: ["/bin/bash", "-c"]
           args:
             - |
               set -euo pipefail
 
+              USER_NAME="{{ .Values.username }}"
+              USER_NAMESPACE="${USER_NAME}"
+
               echo "======================================================================"
-              echo "User Provisioning Job Starting"
+              echo "User Provisioning Job - ${USER_NAME}"
               echo "======================================================================"
 
               # Configuration from Helm values
-              NAMESPACE_PATTERN="{{ .Values.job.namespacePattern }}"
               WORKBENCH_NAME="{{ .Values.job.workbench.name }}"
               WORKBENCH_IMAGE="{{ .Values.job.workbench.image }}"
               GIT_REPO="{{ .Values.job.workbench.gitRepo }}"
@@ -42,8 +46,6 @@ spec:
               CAS_NAMESPACE="{{ .Values.job.cas.namespace }}"
               CAS_S3_ENDPOINT="{{ .Values.job.cas.s3Endpoint }}"
               CAS_DOC_PROCESSOR_TYPE="{{ .Values.job.cas.documentProcessorType }}"
-              BATCH_SIZE={{ .Values.job.processing.batchSize }}
-              BATCH_DELAY={{ .Values.job.processing.batchDelay }}
               ARGOCD_NAMESPACE="{{ .Values.job.argocd.namespace }}"
               ARGOCD_REPO="{{ .Values.job.argocd.repoURL }}"
 
@@ -89,116 +91,71 @@ spec:
               echo "    ✓ RBD storage class: ${STORAGE_CLASS}"
 
               # ================================================================
-              # 2. Discover Showroom Projects and Create User Namespaces
+              # 2. Create User Project
               # ================================================================
               echo ""
-              echo "==> Discovering showroom projects..."
+              echo "==> Creating user project..."
 
-              # Count showroom projects to determine number of users
-              USER_COUNT=$(oc get projects -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep -c "^showroom-" || echo "0")
+              if oc get namespace "${USER_NAMESPACE}" &>/dev/null; then
+                echo "  Namespace ${USER_NAMESPACE} exists, checking Project..."
 
-              if [ "$USER_COUNT" -eq 0 ]; then
-                echo "WARNING: No showroom projects found"
-                echo "Job completed with no work to do."
-                exit 0
-              fi
-
-              echo "    Found ${USER_COUNT} showroom project(s) → creating ${USER_COUNT} users"
-
-              # ================================================================
-              # 2a. Create User Projects
-              # ================================================================
-              echo ""
-              echo "==> Creating user projects..."
-
-              USER_NAMESPACES=""
-              for i in $(seq 1 $USER_COUNT); do
-                USER_NAME="user${i}"
-
-                # Check if namespace exists
-                if oc get namespace "${USER_NAME}" &>/dev/null; then
-                  echo "  Namespace ${USER_NAME} exists, checking Project..."
-
-                  # Check if Project resource exists
-                  if ! oc get project "${USER_NAME}" &>/dev/null; then
-                    echo "    Creating Project resource for existing namespace..."
-                    # Use oc create (not apply) to avoid annotation issues
-                    cat <<EOF | oc create -f -
-              apiVersion: project.openshift.io/v1
-              kind: Project
-              metadata:
-                name: ${USER_NAME}
-                labels:
-                  opendatahub.io/dashboard: 'true'
-                annotations:
-                  openshift.io/description: "Data Science workspace for ${USER_NAME}"
-                  openshift.io/display-name: "${USER_NAME}"
-              EOF
-                  fi
-
-                  # Ensure the OpenShift AI dashboard label is present
-                  oc label namespace "${USER_NAME}" opendatahub.io/dashboard=true --overwrite
-                  echo "    ✓ Project ${USER_NAME} ready"
-                else
-                  echo "  Creating project for: ${USER_NAME}"
-                  # Create Project (which creates the underlying namespace)
+                if ! oc get project "${USER_NAMESPACE}" &>/dev/null; then
+                  echo "    Creating Project resource for existing namespace..."
                   cat <<EOF | oc create -f -
               apiVersion: project.openshift.io/v1
               kind: Project
               metadata:
-                name: ${USER_NAME}
+                name: ${USER_NAMESPACE}
                 labels:
                   opendatahub.io/dashboard: 'true'
                 annotations:
                   openshift.io/description: "Data Science workspace for ${USER_NAME}"
                   openshift.io/display-name: "${USER_NAME}"
               EOF
-                  echo "    ✓ Project ${USER_NAME} created"
                 fi
 
-                USER_NAMESPACES="${USER_NAMESPACES} ${USER_NAME}"
-              done
-
-              # Trim leading space
-              USER_NAMESPACES=$(echo "$USER_NAMESPACES" | xargs)
-
-              echo ""
-              echo "    Created ${USER_COUNT} user project(s)"
+                # Ensure the OpenShift AI dashboard label is present
+                oc label namespace "${USER_NAMESPACE}" opendatahub.io/dashboard=true --overwrite
+                echo "    ✓ Project ${USER_NAMESPACE} ready"
+              else
+                echo "  Creating project for: ${USER_NAME}"
+                cat <<EOF | oc create -f -
+              apiVersion: project.openshift.io/v1
+              kind: Project
+              metadata:
+                name: ${USER_NAMESPACE}
+                labels:
+                  opendatahub.io/dashboard: 'true'
+                annotations:
+                  openshift.io/description: "Data Science workspace for ${USER_NAME}"
+                  openshift.io/display-name: "${USER_NAME}"
+              EOF
+                echo "    ✓ Project ${USER_NAMESPACE} created"
+              fi
 
               # ================================================================
-              # 3. Process Each User Namespace
+              # 3. Provision User Resources
               # ================================================================
               echo ""
-              echo "==> Processing user namespaces..."
-              echo ""
+              echo "==> Provisioning resources for ${USER_NAME}..."
 
-              counter=0
-              for USER_NAMESPACE in $USER_NAMESPACES; do
-                counter=$((counter + 1))
-                USER_NAME="${USER_NAMESPACE}"
+              # ============================================================
+              # 3a. Grant User Permissions to Project
+              # ============================================================
+              echo "  [1/12] Granting user permissions to project..."
 
-                echo "────────────────────────────────────────────────────────────────────"
-                echo "Processing [${counter}/${USER_COUNT}]: ${USER_NAME}"
-                echo "────────────────────────────────────────────────────────────────────"
+              oc adm policy add-role-to-user admin "${USER_NAME}" -n "${USER_NAMESPACE}"
 
-                # ============================================================
-                # 3a. Grant User Permissions to Project
-                # ============================================================
-                echo "  [1/12] Granting user permissions to project..."
+              echo "        ✓ User ${USER_NAME} granted admin role"
 
-                # Grant admin role to the real user account in their namespace
-                oc adm policy add-role-to-user admin "${USER_NAME}" -n "${USER_NAMESPACE}"
+              # ============================================================
+              # 3b. Create Object Bucket Claim (OBC)
+              # ============================================================
+              echo "  [2/12] Creating ObjectBucketClaim..."
 
-                echo "        ✓ User ${USER_NAME} granted admin role"
+              OBC_NAME="${USER_NAME}-bucket"
 
-                # ============================================================
-                # 3b. Create Object Bucket Claim (OBC)
-                # ============================================================
-                echo "  [2/12] Creating ObjectBucketClaim..."
-
-                OBC_NAME="${USER_NAME}-bucket"
-
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: objectbucket.io/v1alpha1
               kind: ObjectBucketClaim
               metadata:
@@ -209,42 +166,42 @@ spec:
                 storageClassName: ${OBC_STORAGE_CLASS}
               EOF
 
-                # Wait for OBC to be bound
-                echo -n "        Waiting for OBC to be provisioned"
-                timeout=300
-                elapsed=0
-                while [ $elapsed -lt $timeout ]; do
-                  OBC_PHASE=$(oc get obc "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-                  if [ "$OBC_PHASE" = "Bound" ]; then
-                    echo " ✓"
-                    break
-                  fi
-                  echo -n "."
-                  sleep 5
-                  elapsed=$((elapsed + 5))
-                done
-
-                if [ "$OBC_PHASE" != "Bound" ]; then
-                  echo " ✗"
-                  echo "        ERROR: OBC did not become Bound within ${timeout}s"
-                  continue
+              # Wait for OBC to be bound
+              echo -n "        Waiting for OBC to be provisioned"
+              timeout=300
+              elapsed=0
+              while [ $elapsed -lt $timeout ]; do
+                OBC_PHASE=$(oc get obc "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                if [ "$OBC_PHASE" = "Bound" ]; then
+                  echo " ✓"
+                  break
                 fi
+                echo -n "."
+                sleep 5
+                elapsed=$((elapsed + 5))
+              done
 
-                # Extract OBC credentials
-                OBC_ACCESS_KEY=$(oc get secret "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' | base64 -d)
-                OBC_SECRET_KEY=$(oc get secret "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.AWS_SECRET_ACCESS_KEY}' | base64 -d)
-                OBC_BUCKET=$(oc get configmap "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.BUCKET_NAME}')
-                OBC_ENDPOINT=$(oc get configmap "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.BUCKET_HOST}')
+              if [ "$OBC_PHASE" != "Bound" ]; then
+                echo " ✗"
+                echo "        ERROR: OBC did not become Bound within ${timeout}s"
+                exit 1
+              fi
 
-                echo "        Bucket: ${OBC_BUCKET}"
-                echo "        Endpoint: ${OBC_ENDPOINT}"
+              # Extract OBC credentials
+              OBC_ACCESS_KEY=$(oc get secret "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' | base64 -d)
+              OBC_SECRET_KEY=$(oc get secret "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.AWS_SECRET_ACCESS_KEY}' | base64 -d)
+              OBC_BUCKET=$(oc get configmap "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.BUCKET_NAME}')
+              OBC_ENDPOINT=$(oc get configmap "${OBC_NAME}" -n "${USER_NAMESPACE}" -o jsonpath='{.data.BUCKET_HOST}')
 
-                # ============================================================
-                # 3c. Create Data Science Connection
-                # ============================================================
-                echo "  [3/12] Creating Data Science Connection..."
+              echo "        Bucket: ${OBC_BUCKET}"
+              echo "        Endpoint: ${OBC_ENDPOINT}"
 
-                cat <<EOF | oc apply -f -
+              # ============================================================
+              # 3c. Create Data Science Connection
+              # ============================================================
+              echo "  [3/12] Creating Data Science Connection..."
+
+              cat <<EOF | oc apply -f -
               apiVersion: v1
               kind: Secret
               metadata:
@@ -265,14 +222,14 @@ spec:
                 AWS_S3_BUCKET: "${OBC_BUCKET}"
               EOF
 
-                echo "        ✓ Data Science Connection created"
+              echo "        ✓ Data Science Connection created"
 
-                # ============================================================
-                # 3d. Create PVC for Workbench
-                # ============================================================
-                echo "  [4/12] Creating PVC for workbench..."
+              # ============================================================
+              # 3d. Create PVC for Workbench
+              # ============================================================
+              echo "  [4/12] Creating PVC for workbench..."
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: v1
               kind: PersistentVolumeClaim
               metadata:
@@ -290,14 +247,14 @@ spec:
                 storageClassName: ${STORAGE_CLASS}
               EOF
 
-                echo "        ✓ PVC created (${PVC_SIZE})"
+              echo "        ✓ PVC created (${PVC_SIZE})"
 
-                # ============================================================
-                # 3e. Create ServiceAccount for Workbench
-                # ============================================================
-                echo "  [5/12] Creating ServiceAccount for workbench..."
+              # ============================================================
+              # 3e. Create ServiceAccount for Workbench
+              # ============================================================
+              echo "  [5/12] Creating ServiceAccount for workbench..."
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: v1
               kind: ServiceAccount
               metadata:
@@ -307,14 +264,14 @@ spec:
                   app: ${WORKBENCH_NAME}
               EOF
 
-                echo "        ✓ ServiceAccount created"
+              echo "        ✓ ServiceAccount created"
 
-                # ============================================================
-                # 3f. Create RBAC for Workbench ServiceAccount
-                # ============================================================
-                echo "  [6/12] Creating RBAC for workbench ServiceAccount..."
+              # ============================================================
+              # 3f. Create RBAC for Workbench ServiceAccount
+              # ============================================================
+              echo "  [6/12] Creating RBAC for workbench ServiceAccount..."
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: rbac.authorization.k8s.io/v1
               kind: Role
               metadata:
@@ -329,7 +286,7 @@ spec:
                   verbs: ["create"]
               EOF
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: rbac.authorization.k8s.io/v1
               kind: RoleBinding
               metadata:
@@ -345,14 +302,14 @@ spec:
                   namespace: ${USER_NAMESPACE}
               EOF
 
-                echo "        ✓ RBAC created"
+              echo "        ✓ RBAC created"
 
-                # ============================================================
-                # 3g. Create Notebook (Workbench)
-                # ============================================================
-                echo "  [7/12] Creating Notebook (workbench)..."
+              # ============================================================
+              # 3g. Create Notebook (Workbench)
+              # ============================================================
+              echo "  [7/12] Creating Notebook (workbench)..."
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: kubeflow.org/v1
               kind: Notebook
               metadata:
@@ -416,7 +373,7 @@ spec:
                               --ServerApp.password=''
                               --ServerApp.base_url=/notebook/${USER_NAMESPACE}/${WORKBENCH_NAME}
                               --ServerApp.quit_button=False
-                              
+
                           - name: JUPYTER_IMAGE
                             value: ${WORKBENCH_IMAGE}
                           - name: PIPELINES_SSL_SA_CERTS
@@ -530,14 +487,14 @@ spec:
                           secretName: ${USER_NAME}-kube-rbac-proxy-tls
               EOF
 
-                echo "        ✓ Notebook created"
+              echo "        ✓ Notebook created"
 
-                # ============================================================
-                # 3h. Create Git Clone Job
-                # ============================================================
-                echo "  [8/12] Creating git-clone Job..."
+              # ============================================================
+              # 3h. Create Git Clone Job
+              # ============================================================
+              echo "  [8/12] Creating git-clone Job..."
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: batch/v1
               kind: Job
               metadata:
@@ -594,14 +551,14 @@ spec:
                             fi
               EOF
 
-                echo "        ✓ Git-clone Job created"
+              echo "        ✓ Git-clone Job created"
 
-                # ============================================================
-                # 3i. Create ArgoCD AppProject
-                # ============================================================
-                echo "  [9/12] Creating ArgoCD AppProject..."
+              # ============================================================
+              # 3i. Create ArgoCD AppProject
+              # ============================================================
+              echo "  [9/12] Creating ArgoCD AppProject..."
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: argoproj.io/v1alpha1
               kind: AppProject
               metadata:
@@ -633,15 +590,15 @@ spec:
                       - ${USER_NAME}
               EOF
 
-                echo "        ✓ ArgoCD AppProject created"
+              echo "        ✓ ArgoCD AppProject created"
 
-                # ============================================================
-                # 3j. Create CAS S3 Credentials Secret
-                # ============================================================
-                if [ "$CAS_ENABLED" = "true" ]; then
-                echo "  [10/12] Creating CAS S3 credentials secret..."
+              # ============================================================
+              # 3j. Create CAS S3 Credentials Secret
+              # ============================================================
+              if [ "$CAS_ENABLED" = "true" ]; then
+              echo "  [10/12] Creating CAS S3 credentials secret..."
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: v1
               kind: Secret
               metadata:
@@ -656,15 +613,15 @@ spec:
                 secretKey: "${OBC_SECRET_KEY}"
               EOF
 
-                echo "        ✓ CAS S3 credentials secret created"
+              echo "        ✓ CAS S3 credentials secret created"
 
-                # ============================================================
-                # 3k. Create CAS DataSource and Domain
-                # ============================================================
-                echo "  [11/12] Creating CAS DataSource and Domain..."
+              # ============================================================
+              # 3k. Create CAS DataSource and Domain
+              # ============================================================
+              echo "  [11/12] Creating CAS DataSource and Domain..."
 
-                # Create stub Filesystem CR (CAS operator requires it even for S3)
-                cat <<EOF | oc apply -f -
+              # Create stub Filesystem CR (CAS operator requires it even for S3)
+              cat <<EOF | oc apply -f -
               apiVersion: scale.spectrum.ibm.com/v1beta1
               kind: Filesystem
               metadata:
@@ -675,7 +632,7 @@ spec:
                   user: ${USER_NAME}
               EOF
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: cas.isf.ibm.com/v1beta1
               kind: DataSource
               metadata:
@@ -698,7 +655,7 @@ spec:
                       key: secretKey
               EOF
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: cas.isf.ibm.com/v1beta1
               kind: Domain
               metadata:
@@ -714,14 +671,14 @@ spec:
                   - name: "domain-${USER_NAME}"
               EOF
 
-                echo "        ✓ CAS DataSource and Domain created"
+              echo "        ✓ CAS DataSource and Domain created"
 
-                # ============================================================
-                # 3l. Create CAS DocumentProcessor
-                # ============================================================
-                echo "  [12/12] Creating CAS DocumentProcessor..."
+              # ============================================================
+              # 3l. Create CAS DocumentProcessor
+              # ============================================================
+              echo "  [12/12] Creating CAS DocumentProcessor..."
 
-                cat <<EOF | oc apply -f -
+              cat <<EOF | oc apply -f -
               apiVersion: cas.isf.ibm.com/v1beta1
               kind: DocumentProcessor
               metadata:
@@ -736,28 +693,17 @@ spec:
                   - domain-${USER_NAME}
               EOF
 
-                echo "        ✓ CAS DocumentProcessor created"
-                else
-                echo "  [10-12/12] CAS provisioning skipped (disabled)"
-                fi
+              echo "        ✓ CAS DocumentProcessor created"
+              else
+              echo "  [10-12/12] CAS provisioning skipped (disabled)"
+              fi
 
-                echo "  ✓ User ${USER_NAME} provisioning complete!"
-                echo ""
-
-                # Batch delay
-                if [ $((counter % BATCH_SIZE)) -eq 0 ] && [ $counter -lt $USER_COUNT ]; then
-                  echo "  [Batch throttling: sleeping for ${BATCH_DELAY}s...]"
-                  sleep ${BATCH_DELAY}
-                  echo ""
-                fi
-              done
-
-              echo "======================================================================"
-              echo "User Provisioning Job Complete"
-              echo "======================================================================"
-              echo "Total users processed: ${USER_COUNT}"
               echo ""
-              echo "Resources created per user:"
+              echo "======================================================================"
+              echo "User Provisioning Complete - ${USER_NAME}"
+              echo "======================================================================"
+              echo ""
+              echo "Resources created:"
               echo "  - Project (OpenShift namespace)"
               echo "  - ObjectBucketClaim (OBC)"
               echo "  - Data Science Connection (Secret)"

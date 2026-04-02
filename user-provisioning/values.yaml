@@ -1,15 +1,15 @@
 ---
+# Username to provision (format: user-{guid})
+# Override this value per user at deploy time
+username: ""
+
 # Job configuration
 job:
-  name: user-provisioning-job
   namespace: openshift-gitops  # Job runs in ArgoCD namespace
   backoffLimit: 4
 
   # Container image (uses OpenShift tools image with oc CLI)
   image: "image-registry.openshift-image-registry.svc:5000/openshift/tools:latest"
-
-  # Namespace pattern for discovering user namespaces
-  namespacePattern: "user*"
 
   # Workbench configuration
   workbench:
@@ -52,12 +52,7 @@ job:
       - "main"
       - "dev"
 
-  # Processing configuration (batch throttling)
-  processing:
-    batchSize: 5       # Process users in batches
-    batchDelay: 20     # Seconds to wait between batches
-
-# ServiceAccount configuration
+# ServiceAccount configuration (must match the shared SA deployed by user-provisioner)
 serviceAccount:
   name: user-provisioner
   namespace: openshift-gitops

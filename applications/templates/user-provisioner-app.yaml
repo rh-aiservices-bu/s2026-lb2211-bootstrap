@@ -2,7 +2,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: user-provisioning
+  name: user-provisioner
   namespace: {{ .Values.argocd.namespace }}
   annotations:
     argocd.argoproj.io/sync-wave: "2"
@@ -11,7 +11,7 @@ spec:
   source:
     repoURL: {{ .Values.git.repoURL }}
     targetRevision: {{ .Values.git.targetRevision }}
-    path: applications/user-provisioning
+    path: applications/user-provisioner
     helm:
       valuesObject: {}
   destination:

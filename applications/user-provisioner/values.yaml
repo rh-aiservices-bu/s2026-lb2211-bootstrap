@@ -1,0 +1,9 @@
+---
+# Job configuration (shared across all per-user Jobs)
+job:
+  name: user-provisioning-job
+
+# ServiceAccount configuration
+serviceAccount:
+  name: user-provisioner
+  namespace: openshift-gitops
