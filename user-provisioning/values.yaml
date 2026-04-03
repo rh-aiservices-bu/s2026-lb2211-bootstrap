@@ -1,7 +1,7 @@
 ---
 # Username to provision (format: user-{guid})
 # Override this value per user at deploy time
-username: ""
+username: "test"
 
 # Job configuration
 job:
